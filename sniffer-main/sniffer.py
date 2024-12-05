@@ -45,6 +45,7 @@ class GUI:
     def interface(self):
         # 获取所有可用接口
         self.interfaces = get_if_list()
+        self.interfaces.insert(0, "所有网卡")  # 添加“所有网卡”选项
         self.interface_map = {iface: iface for iface in self.interfaces}  # 创建接口名称映射
 
         # 添加标签控件
@@ -62,6 +63,7 @@ class GUI:
             values=self.interfaces
         )
         self.combobox.grid(row=0, column=1, padx=10, pady=10)
+        self.combobox.current(0)  # 默认选中“所有网卡”
 
         # 添加标签控件
         self.label2 = Label(self.root, text="请输入BPF过滤条件", font=("黑体", 12), fg="black", bg="white")
@@ -175,53 +177,56 @@ class GUI:
 
     def file_open(self):
         file_path = filedialog.askopenfilename()
-        with open(file_path, "rb") as fd:
-            reader = PcapReader(fd)
-            for v in reader:
-                self.packet_display(v)
-                ps.append(v)
+        if not file_path:
+            return
+        try:
+            with open(file_path, "rb") as fd:
+                reader = PcapReader(fd)
+                for v in reader:
+                    self.packet_display(v)
+                    ps.append(v)
+        except Exception as e:
+            messagebox.showerror("错误", f"无法打开文件: {e}")
 
     def m_event(self):
         '''抓包事件，一直循环'''
         while True:
-            packet = sniff(filter=self.filter, count=1, iface=self.iface)
             event.wait()
-            for p in packet:
-                self.packet_display(p)
-                ps.append(p)
+            try:
+                packet = sniff(filter=self.filter, count=1, iface=self.iface, timeout=1)
+                for p in packet:
+                    self.packet_display(p)
+                    ps.append(p)
+            except Exception as e:
+                messagebox.showerror("错误", f"抓包过程中发生错误: {e}")
+                break
 
     def packet_display(self, p):
         packet_time = timestamp2time(p.time)
-        src = p[Ether].src
-        dst = p[Ether].dst
+        src = p[Ether].src if Ether in p else ""
+        dst = p[Ether].dst if Ether in p else ""
         length = len(p)
         info = p.summary()
 
-        t = p[Ether].type
+        t = p[Ether].type if Ether in p else 0
         protols_Ether = {0x0800: 'IPv4', 0x0806: 'ARP', 0x86dd: 'IPv6', 0x88cc: 'LLDP', 0x891D: 'TTE'}
-        if t in protols_Ether:
-            proto = protols_Ether[t]
-        else:
-            proto = 'Not clear'
+        proto = protols_Ether.get(t, 'Not clear')
 
         # 数据包都会有第三层
         if proto == 'IPv4':
             protos_ip = {1: 'ICMP', 2: 'IGMP', 4: 'IP', 6: 'TCP', 8: 'EGP', 9: 'IGP', 17: 'UDP', 41: 'IPv6', 50: 'ESP', 89: 'OSPF'}
-            src = p[IP].src
-            dst = p[IP].dst
-            t = p[IP].proto
-            if t in protos_ip:
-                proto = protos_ip[t]
+            src = p[IP].src if IP in p else src
+            dst = p[IP].dst if IP in p else dst
+            t = p[IP].proto if IP in p else 0
+            proto = protos_ip.get(t, proto)
 
         # 数据包可能有第四层
         if TCP in p:
             protos_tcp = {80: 'Http', 443: 'Https', 23: 'Telnet', 21: 'Ftp', 20: 'ftp_data', 22: 'SSH', 25: 'SMTP'}
             sport = p[TCP].sport
             dport = p[TCP].dport
-            if sport in protos_tcp:
-                proto = protos_tcp[sport]
-            elif dport in protos_tcp:
-                proto = protos_tcp[dport]
+            proto = protos_tcp.get(sport, proto)
+            proto = protos_tcp.get(dport, proto)
 
         elif UDP in p:
             if p[UDP].sport == 53 or p[UDP].dport == 53:
@@ -249,7 +254,7 @@ class GUI:
             'ICMP': '#e0b047',
 
             'ARP': '#0bf080',
-            'IGMP':'#69eb5c',
+            'IGMP': '#69eb5c',
             'Ethernet': '#95e52c',
             'Not clear': 'white'
         }
@@ -262,6 +267,11 @@ class GUI:
     def start(self):
         self.iface = self.combobox.get()
         self.filter = self.entry.get()
+        if self.iface == "所有网卡":
+            self.iface = None  # 如果选择“所有网卡”，则 iface 设置为 None
+        elif not self.iface:
+            messagebox.showwarning("警告", "请选择一个网卡")
+            return
         print(f"Using filter: {self.filter}")  # 打印过滤条件
         event.set()
         T1 = threading.Thread(target=self.m_event, daemon=True)
@@ -274,8 +284,13 @@ class GUI:
         event.set()
 
     def file_save(self):
-        file_path = filedialog.asksaveasfilename(title=u'保存文件')
-        wrpcap(file_path, ps)
+        file_path = filedialog.asksaveasfilename(title=u'保存文件', defaultextension=".pcap")
+        if not file_path:
+            return
+        try:
+            wrpcap(file_path, ps)
+        except Exception as e:
+            messagebox.showerror("错误", f"保存文件时发生错误: {e}")
 
     def clear_data(self):
         x = self.packet_tree.get_children()
@@ -290,7 +305,6 @@ class GUI:
         pkt = ps[pos - 1]
         self.textbox1.delete("1.0", END)
         self.textbox1.insert(END, hexdump(pkt, dump=True))
-
 
 if __name__ == '__main__':
     a = GUI()
