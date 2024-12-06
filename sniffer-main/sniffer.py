@@ -13,6 +13,7 @@ import os
 from tkinter import messagebox
 from ttkthemes import ThemedTk
 from PIL import Image, ImageTk
+import logging
 
 event = threading.Event()
 ps = []
@@ -91,27 +92,43 @@ class GUI:
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=1)
 
+    logging.basicConfig(filename='sniffer.log', level=logging.INFO, format='%(asctime)s - %(message)s')
+
     def resize_background(self, event):
-        # 检查背景图片路径是否存在
-        if os.path.exists(self.bg_image_path):
-            # 获取当前窗口的宽度和高度
+        if self.bg_image_path and os.path.exists(self.bg_image_path):
             new_width = event.width
             new_height = event.height
 
-            # 重新调整背景图片大小
-            img = Image.open(self.bg_image_path)
-            resized_img = img.resize((new_width, new_height), Image.LANCZOS)
-            self.bg_image = ImageTk.PhotoImage(resized_img)
-            self.bg_label.config(image=self.bg_image)
-        else:
-            print(f"Background image not found at path: {self.bg_image_path}")
+            if hasattr(self, 'last_width') and hasattr(self, 'last_height'):
+                if new_width == self.last_width and new_height == self.last_height:
+                    return
+
+            self.update_background_image()
+
+            self.last_width = new_width
+            self.last_height = new_height
+
+
     def select_background(self):
         file_path = filedialog.askopenfilename()
-        if os.path.exists(file_path):
-            img = Image.open(file_path)
-            resized_img = img.resize((self.root.winfo_width(), self.root.winfo_height()), Image.LANCZOS)
+        if file_path:
+            self.bg_image_path = file_path
+            print(f"Selected background image path: {self.bg_image_path}")
+            self.update_background_image()
+        else:
+            messagebox.showwarning("警告", "未选择任何文件")
+
+    def update_background_image(self):
+        try:
+            img = Image.open(self.bg_image_path)
+            current_width = self.root.winfo_width()
+            current_height = self.root.winfo_height()
+            resized_img = img.resize((current_width, current_height), Image.LANCZOS)
             self.bg_image = ImageTk.PhotoImage(resized_img)
             self.bg_label.config(image=self.bg_image)
+            self.bg_label.image = self.bg_image  # 保持对 PhotoImage 的引用
+        except Exception as e:
+            messagebox.showerror("错误", f"无法加载背景图片: {str(e)}")
 
     def create_interface(self):
         style = ttk.Style()
