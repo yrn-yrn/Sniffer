@@ -9,9 +9,13 @@ import threading
 import time
 import subprocess
 import platform
+import os
+from tkinter import messagebox
+from ttkthemes import ThemedTk
+from PIL import Image, ImageTk
 
 event = threading.Event()
-ps = []  # ps为当前数据包展示区的包建立一个全局列表
+ps = []
 
 def timestamp2time(time_stamp):
     delta_ms = str(time_stamp - int(time_stamp))
@@ -20,143 +24,160 @@ def timestamp2time(time_stamp):
     my_time += delta_ms[1:8]
     return my_time
 
-from ttkthemes import ThemedTk
-
-import os
 def get_readable_interfaces():
     interfaces = []
 
-    # Windows下使用 'netsh' 命令
     if platform.system() == "Windows":
         command = "netsh interface show interface"
         result = subprocess.run(command, capture_output=True, text=True)
         output = result.stdout
 
-        # 解析输出，确保提取友好的名称
         for line in output.splitlines():
-            # 查找包含网络接口名称的行
-            if "已启用" in line or "Connected" in line:  # 检查状态
+            if "已启用" in line or "Connected" in line:
                 parts = line.split()
                 if len(parts) > 0:
-                    interfaces.append(parts[-1])  # 假设最后一个是接口名
+                    interfaces.append(parts[-1])
 
     else:
-        # 用于Linux或macOS，使用其他命令
         command = "ip link show"
         result = subprocess.run(command, capture_output=True, text=True)
         output = result.stdout
 
         for line in output.splitlines():
             if line and not line.startswith(" "):
-                # 提取接口名
                 name = line.split(":")[1].strip()
                 interfaces.append(name)
 
     return interfaces
+
 class GUI:
     def __init__(self):
         self.root = ThemedTk(theme="arc")
         self.root.title('网络嗅探器')
-        self.root.geometry("800x600+500+150")
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        # 设置窗口尺寸为接近全屏但保留标题栏和关闭按钮
+        self.root.geometry(f"{screen_width - 50}x{screen_height - 50}+0+0")
 
         # 设置图标
         icon_path = os.path.join(os.getcwd(), 'icon.ico')
         if os.path.exists(icon_path):
             self.root.iconbitmap(icon_path)
+        # 添加背景标签
+        self.canvas = Canvas(self.root)
+        self.canvas.place(x=0, y=0, relwidth=1, relheight=1)
+        self.bg_label = Label(self.canvas)
+        self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+        self.canvas.create_window(0, 0, window=self.bg_label, anchor='nw')
+        self.root.bind('<Configure>', self.resize_background)
 
         # 设置背景图片
-        bg_image_path = os.path.join(os.getcwd(), 'background.png')
-        if os.path.exists(bg_image_path):
-            self.bg_image = PhotoImage(file=bg_image_path)
+        self.bg_image_path = os.path.join(os.getcwd(), 'background.png')
+        if os.path.exists(self.bg_image_path):
+            img = Image.open(self.bg_image_path)
+            resized_img = img.resize((self.root.winfo_width(), self.root.winfo_height()), Image.LANCZOS)
+            self.bg_image = ImageTk.PhotoImage(resized_img)
             self.bg_label = Label(self.root, image=self.bg_image)
             self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
 
-        self.interface()
+        self.create_interface()
+        self.create_packet_display_area()
+        self.create_detail_area()
+        self.create_hex_display_area()
+        self.create_menu()
 
-    def interface(self):
+        # 设置窗口大小调整时的行为
+        self.root.grid_rowconfigure(3, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_columnconfigure(1, weight=1)
+
+    def resize_background(self, event):
+        # 检查背景图片路径是否存在
+        if os.path.exists(self.bg_image_path):
+            # 获取当前窗口的宽度和高度
+            new_width = event.width
+            new_height = event.height
+
+            # 重新调整背景图片大小
+            img = Image.open(self.bg_image_path)
+            resized_img = img.resize((new_width, new_height), Image.LANCZOS)
+            self.bg_image = ImageTk.PhotoImage(resized_img)
+            self.bg_label.config(image=self.bg_image)
+        else:
+            print(f"Background image not found at path: {self.bg_image_path}")
+    def select_background(self):
+        file_path = filedialog.askopenfilename()
+        if os.path.exists(file_path):
+            img = Image.open(file_path)
+            resized_img = img.resize((self.root.winfo_width(), self.root.winfo_height()), Image.LANCZOS)
+            self.bg_image = ImageTk.PhotoImage(resized_img)
+            self.bg_label.config(image=self.bg_image)
+
+    def create_interface(self):
+        style = ttk.Style()
+        style.configure("Treeview", background="white", foreground="black", rowheight=25, fieldbackground="white")
+        style.map('Treeview', background=[('selected', 'blue')])
 
         self.interfaces = get_readable_interfaces()
-        self.interfaces.insert(0, "所有网卡")  # 添加“所有网卡”选项
+        self.interfaces.insert(0, "所有网卡")
 
-        # 添加标签控件
-        self.label1 = Label(self.root, text="请选择网卡", font=("黑体", 12), fg="black", bg="white")
-        self.label1.grid(row=0, column=0, padx=15, pady=15, sticky="w")
-
-        # 添加选择框
+        # 第一行：网卡选择标签和下拉框
+        self.label1 = Label(self.root, text="请选择网卡", font=("黑体", 12), fg="black")
+        self.label1.grid(row=0, column=0, padx=(300,15), pady=15, sticky='w')
         self.combobox = ttk.Combobox(
             master=self.root,
             height=10,
-            width=30,
-            state='readonly',  # 设置为只读，防止用户输入无效名称
+            width=50,
+            state='readonly',
             cursor='arrow',
-            font=('', 14),
+            font=("黑体", 12),
             values=self.interfaces
         )
         self.combobox.grid(row=0, column=1, padx=10, pady=10, sticky='w')
-        self.combobox.current(0)  # 默认选中“所有网卡”
+        self.combobox.current(0)
 
-        # 添加标签控件
-        self.label2 = Label(self.root, text="请输入BPF过滤条件", font=("黑体", 14), fg="black", bg="white")
-        self.label2.grid(row=1, column=0, padx=10, pady=10)
-
-        # 添加输入框
+        # 第二行：过滤条件标签和输入框
+        self.label2 = Label(self.root, text="请输入 BPF 过滤条件", font=("黑体", 12), fg="black")
+        self.label2.grid(row=1, column=0, padx=(300,15), sticky='w')
         self.entry = Entry(self.root, width=50, font=("黑体", 12))
-        self.entry.grid(row=1, column=1, padx=10, pady=10)
+        self.entry.grid(row=1, column=1, padx=15, sticky='w')
 
-        # 添加过滤条件模板下拉菜单
+        # 第三行：过滤模板下拉框
         self.filter_templates = [
-            "无过滤条件",  # 提示项，对应空字符串
-            "ip",  # 捕获所有IP数据包
-            "arp",  # 捕获所有ARP数据包
-            "tcp",  # 捕获所有TCP数据包
-            "udp",  # 捕获所有UDP数据包
-            "src host 192.168.1.1",  # 捕获源地址为192.168.1.1的所有数据包
-            "dst host 192.168.1.2",  # 捕获目标地址为192.168.1.2的所有数据包
-            "host 192.168.1.1",  # 捕获源地址或目标地址为192.168.1.1的所有数据包
-            "tcp port 80",  # 捕获所有TCP端口为80的数据包（通常是HTTP流量）
-            "udp port 53",  # 捕获所有UDP端口为53的数据包（通常是DNS流量）
-            "port 22",  # 捕获所有端口为22的数据包（通常是SSH流量）
-            "tcp and (src port 80 or dst port 80)",  # 捕获所有源端口或目标端口为80的TCP数据包
-            "ip and (src host 192.168.1.1 or dst host 192.168.1.2)",  # 捕获所有源地址为192.168.1.1或目标地址为192.168.1.2的IP数据包
-            "icmp",  # 捕获所有ICMP数据包
-            "ether src 00:11:22:33:44:55",  # 捕获源MAC地址为00:11:22:33:44:55的所有以太网帧
-            "vlan 10"  # 捕获所有VLAN ID为10的数据包
+            "无过滤条件",
+            "ip",
+            "arp",
+            "tcp",
+            "udp",
+            "src host 192.168.1.1",
+            "dst host 192.168.1.2",
+            "host 192.168.1.1",
+            "tcp port 80",
+            "udp port 53",
+            "port 22",
+            "tcp and (src port 80 or dst port 80)",
+            "ip and (src host 192.168.1.1 or dst host 192.168.1.2)",
+            "icmp",
+            "ether src 00:11:22:33:44:55",
+            "vlan 10"
         ]
-
         self.template_combobox = ttk.Combobox(
             master=self.root,
             height=10,
             width=50,
-            state='readonly',  # 设置为只读，防止用户输入无效名称
+            state='readonly',
             cursor='arrow',
-            font=('', 12),
+            font=("黑体", 12),
             values=self.filter_templates
         )
-        self.template_combobox.grid(row=2, column=1, padx=10, pady=10)
+        self.template_combobox.grid(row=2, column=1, padx=10, pady=10, sticky='w')
         self.template_combobox.bind("<<ComboboxSelected>>", self.on_template_select)
-        self.template_combobox.current(0)  # 默认选中提示项
+        self.template_combobox.current(0)
 
-        # 添加菜单功能
-        self.mainmenu = Menu(self.root)
-        self.menuFile = Menu(self.mainmenu)
-        self.mainmenu.add_cascade(label="文件", menu=self.menuFile)
-        self.menuFile.add_command(label="打开", command=self.file_open)
-        self.menuFile.add_command(label="保存", command=self.file_save)
-        self.menuFile.add_command(label="退出", command=self.root.destroy)
+        # 创建数据包显示区域
+        self.create_packet_display_area()
 
-        self.menuEdit = Menu(self.mainmenu)
-        self.mainmenu.add_cascade(label="编辑", menu=self.menuEdit)
-        self.menuEdit.add_command(label="清空", command=self.clear_data)
-
-        self.menuCap = Menu(self.mainmenu)
-        self.mainmenu.add_cascade(label="捕获", menu=self.menuCap)
-        self.menuCap.add_command(label="开始", command=self.start)
-        self.menuCap.add_command(label="暂停", command=self.pause)
-        self.menuCap.add_command(label="继续", command=self.cont)
-
-        self.root.config(menu=self.mainmenu)
-
-        # 添加数据包展示区
+    def create_packet_display_area(self):
         self.packet_tree = Treeview(
             self.root,
             columns=('num', 'packet_time', 'src', 'dst', 'proto', 'length', 'info'),
@@ -179,121 +200,136 @@ class GUI:
         self.hbar.grid(row=4, column=0, columnspan=2, sticky="ew")
         self.packet_tree.configure(xscrollcommand=self.hbar.set)
 
-        # 添加可折叠的详细信息框
-        self.detail_frame = ttk.LabelFrame(self.root, text="详细信息", padding=(5, 5))
-        # 添加详细信息树视图
-        self.detail_tree = Treeview(
-            self.detail_frame,
-            columns=('layer', 'field', 'value'),
-            show='headings',
-            displaycolumns="#all",
-            style="Treeview"
-        )
-        self.detail_tree.heading('layer', text="层次", anchor=W)
-        self.detail_tree.column('layer', width=100, anchor='w')
-        self.detail_tree.heading('field', text="字段", anchor=W)
-        self.detail_tree.column('field', width=150, anchor='w')
-        self.detail_tree.heading('value', text="值", anchor=W)
-        self.detail_tree.column('value', width=300, anchor='w')
-        self.detail_tree.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="nsew")
+        self.packet_tree.bind("<Double-1>", self.callback)
 
-        # 添加折叠按钮
+        # 设置数据包展示区的颜色
+        style = ttk.Style()
+        style.configure("Packet.Treeview", background="white", foreground="black", rowheight=25, fieldbackground="white")
+        style.map('Packet.Treeview', background=[('selected', 'blue')])
+        self.packet_tree.configure(style="Packet.Treeview")
+
+    def create_detail_area(self):
+        self.detail_frame = ttk.LabelFrame(self.root, text="详细信息", padding=(5, 5))
+
         self.frame_var = IntVar(value=1)
         self.ethernet_var = IntVar(value=1)
         self.ip_var = IntVar(value=1)
         self.tcp_var = IntVar(value=1)
         self.http_var = IntVar(value=1)
 
-        self.frame_check = ttk.Checkbutton(self.detail_frame, text="Frame: 物理层的数据帧概况", variable=self.frame_var, command=lambda: self.toggle_frame(self.frame_var, self.frame_label))
+        style = ttk.Style()
+        style.configure('Detail.Treeview', background='white', foreground='black', rowheight=25,
+                        fieldbackground='white')
+        self.detail_frame.configure(style='Detail.Treeview')
+
+        self.frame_check = ttk.Checkbutton(self.detail_frame, text="Frame: 物理层的数据帧概况", variable=self.frame_var,
+                                           command=lambda: self.toggle_frame(self.frame_var, self.detail_tree),
+                                           style='My.TCheckbutton')
+        self.ethernet_check = ttk.Checkbutton(self.detail_frame, text="Ethernet II: 数据链路层以太网帧头部信息",
+                                              variable=self.ethernet_var,
+                                              command=lambda: self.toggle_frame(self.ethernet_var, self.detail_tree),
+                                              style='My.TCheckbutton')
+        self.ip_check = ttk.Checkbutton(self.detail_frame, text="Internet Protocol Version 4: 互联网层 IP 包头部信息",
+                                        variable=self.ip_var,
+                                        command=lambda: self.toggle_frame(self.ip_var, self.detail_tree),
+                                        style='My.TCheckbutton')
+        self.tcp_check = ttk.Checkbutton(self.detail_frame,
+                                         text="Transmission Control Protocol: 传输层 TCP 的数据段头部信息",
+                                         variable=self.tcp_var,
+                                         command=lambda: self.toggle_frame(self.tcp_var, self.detail_tree),
+                                         style='My.TCheckbutton')
+        self.http_check = ttk.Checkbutton(self.detail_frame,
+                                          text="Hypertext Transfer Protocol: 应用层的信息，此处是 HTTP 协议",
+                                          variable=self.http_var,
+                                          command=lambda: self.toggle_frame(self.http_var, self.detail_tree),
+                                          style='My.TCheckbutton')
+
         self.frame_check.grid(row=0, column=0, sticky="w", padx=5, pady=5)
-
-        self.ethernet_check = ttk.Checkbutton(self.detail_frame, text="Ethernet II: 数据链路层以太网帧头部信息", variable=self.ethernet_var, command=lambda: self.toggle_frame(self.ethernet_var, self.ethernet_label))
         self.ethernet_check.grid(row=1, column=0, sticky="w", padx=5, pady=5)
-
-        self.ip_check = ttk.Checkbutton(self.detail_frame, text="Internet Protocol Version 4: 互联网层IP包头部信息", variable=self.ip_var, command=lambda: self.toggle_frame(self.ip_var, self.ip_label))
         self.ip_check.grid(row=2, column=0, sticky="w", padx=5, pady=5)
-
-        self.tcp_check = ttk.Checkbutton(self.detail_frame, text="Transmission Control Protocol: 传输层TCP的数据段头部信息", variable=self.tcp_var, command=lambda: self.toggle_frame(self.tcp_var, self.tcp_label))
         self.tcp_check.grid(row=3, column=0, sticky="w", padx=5, pady=5)
-
-        self.http_check = ttk.Checkbutton(self.detail_frame, text="Hypertext Transfer Protocol: 应用层的信息，此处是HTTP协议", variable=self.http_var, command=lambda: self.toggle_frame(self.http_var, self.http_label))
         self.http_check.grid(row=4, column=0, sticky="w", padx=5, pady=5)
 
-        # 初始化标签
-        self.frame_label = Label(self.detail_frame, text="", justify=LEFT)
-        self.frame_label.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        self.detail_frame.grid(row=5, column=0, columnspan=2, padx=10, pady=10, sticky="nsew")
 
-        self.ethernet_label = Label(self.detail_frame, text="", justify=LEFT)
-        self.ethernet_label.grid(row=1, column=1, sticky="w", padx=5, pady=5)
-
-        self.ip_label = Label(self.detail_frame, text="", justify=LEFT)
-        self.ip_label.grid(row=2, column=1, sticky="w", padx=5, pady=5)
-
-        self.tcp_label = Label(self.detail_frame, text="", justify=LEFT)
-        self.tcp_label.grid(row=3, column=1, sticky="w", padx=5, pady=5)
-
-        self.http_label = Label(self.detail_frame, text="", justify=LEFT)
-        self.http_label.grid(row=4, column=1, sticky="w", padx=5, pady=5)
-
-        # 添加十六进制展示区文本框
+    def create_hex_display_area(self):
         self.textbox1 = Text(self.root, width=100, height=10, font=("黑体", 12))
         self.textbox1.grid(row=6, column=0, columnspan=2, padx=10, pady=10, sticky="nsew")
 
-        # 使窗口大小调整时，控件也跟随调整
-        self.root.grid_rowconfigure(3, weight=1)
-        self.root.grid_columnconfigure(0, weight=1)
-        self.root.grid_columnconfigure(1, weight=1)
+    def create_menu(self):
+        self.mainmenu = Menu(self.root)
+        self.menuFile = Menu(self.mainmenu)
+        self.mainmenu.add_cascade(label="文件", menu=self.menuFile)
+        self.menuFile.add_command(label="打开", command=self.file_open)
+        self.menuFile.add_command(label="保存", command=self.file_save)
+        self.menuFile.add_command(label="退出", command=self.root.destroy)
 
-        # 设置 Treeview 样式
-        style = ttk.Style()
-        style.configure("Treeview", background="white", foreground="black", rowheight=25, fieldbackground="white")
-        style.map('Treeview', background=[('selected', 'blue')])
+        self.menuEdit = Menu(self.mainmenu)
+        self.mainmenu.add_cascade(label="编辑", menu=self.menuEdit)
+        self.menuEdit.add_command(label="清空", command=self.clear_data)
 
-        # 绑定双击事件以显示数据包详情
-        self.packet_tree.bind("<Double-1>", self.callback)
-        # 将 detail_frame 添加到主窗口
-        self.detail_frame.grid(row=5, column=0, columnspan=2, padx=10, pady=10, sticky="nsew")
+        self.menuCap = Menu(self.mainmenu)
+        self.mainmenu.add_cascade(label="捕获", menu=self.menuCap)
+        self.menuCap.add_command(label="开始", command=self.start)
+        self.menuCap.add_command(label="暂停", command=self.pause)
+        self.menuCap.add_command(label="继续", command=self.cont)
 
-    def toggle_frame(self, var, label):
+        # 添加设置菜单
+        self.menuSettings = Menu(self.mainmenu)
+        self.mainmenu.add_cascade(label="设置", menu=self.menuSettings)
+        self.menuSettings.add_command(label="修改背景", command=self.select_background)
+
+        self.root.config(menu=self.mainmenu)
+    def toggle_frame(self, var, tree):
         selected_item = self.packet_tree.selection()
         if selected_item:
-            pos = int(self.packet_tree.item(selected_item[0], "values")[0])
-            pkt = ps[pos - 1]
+            pos = int(self.packet_tree.item(selected_item[0], "values")[0]) - 1
+            pkt = ps[pos]
             if var.get():
-                # 获取详细信息并设置到label中
-                detailed_info = self.get_detailed_info_for_layer(label.cget("text"), pkt)
-                label.config(text=detailed_info)
-            else:
-                label.config(text="")
+                layer_name = ""
+                if var == self.frame_var:
+                    layer_name = "Frame: 物理层的数据帧概况"
+                elif var == self.ethernet_var:
+                    layer_name = "Ethernet II: 数据链路层以太网帧头部信息"
+                elif var == self.ip_var:
+                    layer_name = "Internet Protocol Version 4: 互联网层 IP 包头部信息"
+                elif var == self.tcp_var:
+                    layer_name = "Transmission Control Protocol: 传输层 TCP 的数据段头部信息"
+                elif var == self.http_var:
+                    layer_name = "Hypertext Transfer Protocol: 应用层的信息，此处是 HTTP 协议"
 
+                info = self.get_detailed_info_for_layer(layer_name, pkt)
+                for item in tree.get_children():
+                    tree.delete(item)
+                tree.insert("", END, values=(layer_name, info))
+            else:
+                for item in tree.get_children():
+                    tree.delete(item)
     def get_detailed_info_for_layer(self, layer_name, pkt):
         if layer_name == "Frame: 物理层的数据帧概况":
-            return f"Frame Info: {pkt.show(dump=True)}"
+            frame_info = pkt.show(dump=True)
+            return f"Frame Info:\n{frame_info.replace(',', '\n')}"
         elif layer_name == "Ethernet II: 数据链路层以太网帧头部信息":
             eth = pkt.getlayer(Ether)
             if eth:
-                return f"Source MAC: {eth.src}\nDestination MAC: {eth.dst}"
-            else:
-                return "No Ethernet layer found"
-        elif layer_name == "Internet Protocol Version 4: 互联网层IP包头部信息":
+                return f"源 MAC: {eth.src}\n目标 MAC: {eth.dst}"
+            return "没有以太网层"
+        elif layer_name == "Internet Protocol Version 4: 互联网层 IP 包头部信息":
             ip = pkt.getlayer(IP)
             if ip:
-                return f"Source IP: {ip.src}\nDestination IP: {ip.dst}\nProtocol: {ip.proto}"
-            else:
-                return "No IP layer found"
-        elif layer_name == "Transmission Control Protocol: 传输层TCP的数据段头部信息":
+                return f"源 IP: {ip.src}\n目标 IP: {ip.dst}\n协议: {ip.proto}"
+            return "没有 IP 层"
+        elif layer_name == "Transmission Control Protocol: 传输层 TCP 的数据段头部信息":
             tcp = pkt.getlayer(TCP)
             if tcp:
-                return f"Source Port: {tcp.sport}\nDestination Port: {tcp.dport}\nSequence Number: {tcp.seq}"
-            else:
-                return "No TCP layer found"
-        elif layer_name == "Hypertext Transfer Protocol: 应用层的信息":
+                return f"源端口: {tcp.sport}\n目标端口: {tcp.dport}\n序列号: {tcp.seq}"
+            return "没有 TCP 层"
+        elif layer_name == "Hypertext Transfer Protocol: 应用层的信息，此处是 HTTP 协议":
             http = pkt.getlayer(Raw)
             if http and b'HTTP' in http.load:
                 return http.load.decode('utf-8', errors='ignore')
-            else:
-                return "No HTTP layer found"
-        return "No detailed information available"
+            return "没有 HTTP 层"
+        return "没有详细的信息"
 
     def on_template_select(self, event):
         selected_template = self.template_combobox.get()
@@ -315,10 +351,9 @@ class GUI:
                     self.packet_display(v)
                     ps.append(v)
         except Exception as e:
-            messagebox.showerror("错误", f"无法打开文件: {e}")
+            messagebox.showerror("错误", f"无法打开文件: {str(e)}")
 
     def m_event(self):
-        '''抓包事件，一直循环'''
         while True:
             event.wait()
             try:
@@ -327,7 +362,7 @@ class GUI:
                     self.packet_display(p)
                     ps.append(p)
             except Exception as e:
-                messagebox.showerror("错误", f"抓包过程中发生错误: {e}")
+                messagebox.showerror("错误", f"抓包过程中发生错误: {str(e)}")
                 break
 
     def packet_display(self, p):
@@ -445,17 +480,14 @@ class GUI:
         # 填充详细信息
         self.populate_detail_tree(pkt, '')
 
-    def populate_detail_tree(self, pkt, parent_id):
+    def populate_detail_tree(self, pkt):
+        # 清空现有内容
+        for i in self.detail_tree.get_children():
+            self.detail_tree.delete(i)
+
         for layer in pkt:
-            layer_name = layer.name
-            layer_id = self.detail_tree.insert(parent_id, END, values=(layer_name, '', ''))
-
-            for field in layer.fields_desc:
-                field_name = field.name
-                field_value = getattr(layer, field_name)
-                self.detail_tree.insert(layer_id, END, values=('', field_name, field_value))
-
-
+            layer_info = layer.show(dump=True)  # 获取层信息
+            self.detail_tree.insert("", END, values=(layer_info,))  # 直接插入详细信息
 if __name__ == '__main__':
     a = GUI()
     a.root.mainloop()
