@@ -14,6 +14,8 @@ from tkinter import messagebox
 from ttkthemes import ThemedTk
 from PIL import Image, ImageTk
 import logging
+from tkinter import simpledialog
+
 
 event = threading.Event()
 ps = []
@@ -91,6 +93,9 @@ class GUI:
         self.root.grid_rowconfigure(3, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=1)
+
+        # 初始化默认字体大小
+        self.default_font_size = 12  # 默认字体大小为12
 
     logging.basicConfig(filename='sniffer.log', level=logging.INFO, format='%(asctime)s - %(message)s')
 
@@ -295,8 +300,32 @@ class GUI:
         self.menuSettings = Menu(self.mainmenu)
         self.mainmenu.add_cascade(label="设置", menu=self.menuSettings)
         self.menuSettings.add_command(label="修改背景", command=self.select_background)
+        self.menuSettings.add_command(label="修改字号", command=self.change_font_size)  # 修改这里
 
         self.root.config(menu=self.mainmenu)
+
+    def change_font_size(self):
+        current_font_size = self.default_font_size  # 使用默认字体大小
+        new_size = simpledialog.askinteger("修改字号", "请输入新的字号:", initialvalue=current_font_size, minvalue=8, maxvalue=36)
+        if new_size:
+            self.update_font_size(new_size)
+
+    def update_font_size(self, size):
+        self.default_font_size = size  # 更新默认字体大小
+        # 更新所有控件的字体大小
+        for widget in self.root.winfo_children():
+            if isinstance(widget, (Label, Entry, Button, Checkbutton)):
+                widget.config(font=("黑体", size))
+            elif isinstance(widget, ttk.Combobox):
+                widget.config(font=("黑体", size))
+            elif isinstance(widget, Treeview):
+                style = ttk.Style()
+                style.configure("Treeview", font=("黑体", size))
+                style.configure("Packet.Treeview", font=("黑体", size))
+                style.configure("Detail.Treeview", font=("黑体", size))
+            elif isinstance(widget, Text):
+                widget.config(font=("黑体", size))
+
     def toggle_frame(self, var, tree):
         selected_item = self.packet_tree.selection()
         if selected_item:
